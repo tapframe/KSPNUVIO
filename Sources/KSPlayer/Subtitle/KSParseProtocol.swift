@@ -11,6 +11,22 @@ import AppKit
 #else
 import UIKit
 #endif
+
+#if canImport(UIKit)
+/// ASS/SSA italic is a boolean toggle (\i0 / \i1). Do NOT use extreme obliqueness=1 (~45° skew).
+private func ksApplyItalicTrait(_ font: UIFont, enabled: Bool) -> UIFont {
+    var traits = font.fontDescriptor.symbolicTraits
+    if enabled {
+        traits.insert(.traitItalic)
+    } else {
+        traits.remove(.traitItalic)
+    }
+    guard let descriptor = font.fontDescriptor.withSymbolicTraits(traits) else {
+        return font
+    }
+    return UIFont(descriptor: descriptor, size: font.pointSize)
+}
+#endif
 public protocol KSParseProtocol {
     func canParse(scanner: Scanner) -> Bool
     func parsePart(scanner: Scanner) -> SubtitlePart?
@@ -178,6 +194,7 @@ extension String {
         }
         var fontName: String?
         var fontSize: Float?
+        var italicToggle: Float?
         let subStyleArr = style.components(separatedBy: "\\")
         var shadow = attributes[.shadow] as? NSShadow
         for item in subStyleArr {
@@ -202,13 +219,15 @@ extension String {
                     fontSize = scanner.scanFloat()
                 }
             case "i":
-                attributes[.obliqueness] = scanner.scanFloat()
+                // ASS/SSA uses \i0 / \i1 to toggle italics.
+                italicToggle = scanner.scanFloat()
             case "s":
                 if scanner.scanString("had") != nil {
                     if let size = scanner.scanFloat() {
                         shadow = shadow ?? NSShadow()
-                        shadow?.shadowOffset = CGSize(width: CGFloat(size), height: CGFloat(size))
-                        shadow?.shadowBlurRadius = CGFloat(size)
+                        let clamped = Swift.min(Swift.max(size, 0), 4)
+                        shadow?.shadowOffset = CGSize(width: CGFloat(clamped), height: CGFloat(clamped))
+                        shadow?.shadowBlurRadius = CGFloat(clamped)
                     }
                     attributes[.shadow] = shadow
                 } else {
@@ -242,6 +261,28 @@ extension String {
             let font = UIFont(name: fontName, size: CGFloat(fontSize)) ?? UIFont.systemFont(ofSize: CGFloat(fontSize))
             attributes[.font] = font
         }
+
+        // Apply italic toggle if requested
+        if let italicToggle {
+            #if canImport(UIKit)
+            if let currentFont = attributes[.font] as? UIFont {
+                attributes[.font] = ksApplyItalicTrait(currentFont, enabled: italicToggle != 0)
+                attributes.removeValue(forKey: .obliqueness)
+            } else {
+                if italicToggle != 0 {
+                    attributes[.obliqueness] = 0.2
+                } else {
+                    attributes.removeValue(forKey: .obliqueness)
+                }
+            }
+            #else
+            if italicToggle != 0 {
+                attributes[.obliqueness] = 0.2
+            } else {
+                attributes.removeValue(forKey: .obliqueness)
+            }
+            #endif
+        }
         return NSAttributedString(string: self, attributes: attributes)
     }
 }
@@ -259,7 +300,7 @@ public extension [String: String] {
                 let matrix = CGAffineTransform(rotationAngle: radians)
                 #endif
                 let fontDescriptor = UIFontDescriptor(name: fontName, matrix: matrix)
-                font = UIFont(descriptor: fontDescriptor, size: fontSize) ?? font
+                font = UIFont(descriptor: fontDescriptor, size: fontSize)
             }
             attributes[.font] = font
         }
@@ -275,7 +316,16 @@ public extension [String: String] {
             attributes[.expansion] = 1
         }
         if self["Italic"] == "1" {
-            attributes[.obliqueness] = 1
+            #if canImport(UIKit)
+            if let currentFont = attributes[.font] as? UIFont {
+                attributes[.font] = ksApplyItalicTrait(currentFont, enabled: true)
+                attributes.removeValue(forKey: .obliqueness)
+            } else {
+                attributes[.obliqueness] = 0.2
+            }
+            #else
+            attributes[.obliqueness] = 0.2
+            #endif
         }
         if self["Underline"] == "1" {
             attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
@@ -297,7 +347,8 @@ public extension [String: String] {
 
         if self["BorderStyle"] == "1" {
             if let strokeWidth = self["Outline"].flatMap(Double.init), strokeWidth > 0 {
-                attributes[.strokeWidth] = -strokeWidth
+                let clampedStroke = Swift.min(strokeWidth, 3.0)
+                attributes[.strokeWidth] = -clampedStroke
                 if let assColor = self["OutlineColour"] {
                     attributes[.strokeColor] = UIColor(assColor: assColor)
                 }
@@ -307,8 +358,9 @@ public extension [String: String] {
                shadowOffset > 0
             {
                 let shadow = NSShadow()
-                shadow.shadowOffset = CGSize(width: CGFloat(shadowOffset), height: CGFloat(shadowOffset))
-                shadow.shadowBlurRadius = shadowOffset
+                let clampedShadow = Swift.min(shadowOffset, 4.0)
+                shadow.shadowOffset = CGSize(width: CGFloat(clampedShadow), height: CGFloat(clampedShadow))
+                shadow.shadowBlurRadius = clampedShadow
                 shadow.shadowColor = UIColor(assColor: assColor)
                 attributes[.shadow] = shadow
             }

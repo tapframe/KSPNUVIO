@@ -78,6 +78,7 @@ open class VideoPlayerView: PlayerView {
     public var titleLabel = UILabel()
     public var subtitleLabel = UILabel()
     public var subtitleBackView = UIImageView()
+    private var subtitleBottomConstraint: NSLayoutConstraint?
     /// Activty Indector for loading
     public var loadingIndector: UIView & LoadingIndector = UIActivityIndicatorView(frame: CGRect(x: 0, y: 0, width: 30, height: 30))
     public var seekToView: UIView & SeekViewProtocol = SeekView()
@@ -265,10 +266,12 @@ open class VideoPlayerView: PlayerView {
             if let part = srtControl.parts.first {
                 subtitleBackView.image = part.image
                 subtitleLabel.attributedText = part.text
+                updateSubtitleLabelLayer(for: part.text)
                 subtitleBackView.isHidden = false
             } else {
                 subtitleBackView.image = nil
                 subtitleLabel.attributedText = nil
+                updateSubtitleLabelLayer(for: nil)
                 subtitleBackView.isHidden = true
             }
         }
@@ -696,7 +699,13 @@ extension VideoPlayerView {
         subtitleLabel.backingLayer?.shadowOffset = CGSize(width: 1.0, height: 1.0)
         subtitleLabel.backingLayer?.shadowOpacity = 0.9
         subtitleLabel.backingLayer?.shadowRadius = 1.0
-        subtitleLabel.backingLayer?.shouldRasterize = true
+        // Rasterizing frequently updating subtitle text causes ugly glyph artifacts on iOS
+        // (lines through letters / shimmering). Keep it crisp.
+        subtitleLabel.backingLayer?.shouldRasterize = false
+        #if canImport(UIKit)
+        subtitleLabel.backingLayer?.rasterizationScale = UIScreen.main.scale
+        #endif
+        subtitleLabel.backingLayer?.allowsEdgeAntialiasing = true
         updateSrt()
         subtitleBackView.contentMode = .scaleAspectFit
         subtitleBackView.cornerRadius = 2
@@ -705,8 +714,9 @@ extension VideoPlayerView {
         addSubview(subtitleBackView)
         subtitleBackView.translatesAutoresizingMaskIntoConstraints = false
         subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        subtitleBottomConstraint = subtitleBackView.bottomAnchor.constraint(equalTo: safeBottomAnchor, constant: -5)
         NSLayoutConstraint.activate([
-            subtitleBackView.bottomAnchor.constraint(equalTo: safeBottomAnchor, constant: -5),
+            subtitleBottomConstraint!,
             subtitleBackView.centerXAnchor.constraint(equalTo: centerXAnchor),
             subtitleBackView.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -10),
             subtitleLabel.leadingAnchor.constraint(equalTo: subtitleBackView.leadingAnchor, constant: 10),
@@ -714,6 +724,49 @@ extension VideoPlayerView {
             subtitleLabel.topAnchor.constraint(equalTo: subtitleBackView.topAnchor, constant: 2),
             subtitleLabel.bottomAnchor.constraint(equalTo: subtitleBackView.bottomAnchor, constant: -2),
         ])
+    }
+
+    /// Positive values move subtitles up from the safe bottom edge.
+    public func setSubtitleBottomOffset(_ offset: CGFloat) {
+        subtitleBottomConstraint?.constant = -max(0, offset)
+        layoutIfNeeded()
+    }
+
+    /// Avoid double shadows (layer shadow + attributed shadow/stroke) which can create internal glyph artifacts.
+    private func updateSubtitleLabelLayer(for attributedText: NSAttributedString?) {
+        guard let layer = subtitleLabel.backingLayer else { return }
+
+        layer.shouldRasterize = false
+        #if canImport(UIKit)
+        layer.rasterizationScale = UIScreen.main.scale
+        #endif
+        layer.allowsEdgeAntialiasing = true
+
+        guard let attributedText, attributedText.length > 0 else {
+            // Default subtle shadow for plain text.
+            layer.shadowOpacity = 0.9
+            layer.shadowRadius = 1.0
+            layer.shadowOffset = CGSize(width: 1.0, height: 1.0)
+            layer.shadowColor = UIColor.black.cgColor
+            return
+        }
+
+        let attrs = attributedText.attributes(at: 0, effectiveRange: nil)
+        let hasAttributedShadow = attrs[.shadow] != nil
+        let hasStroke = attrs[.strokeWidth] != nil
+
+        if hasAttributedShadow || hasStroke {
+            // Let attributed string control the appearance.
+            layer.shadowOpacity = 0.0
+            layer.shadowRadius = 0.0
+            layer.shadowOffset = .zero
+            layer.shadowColor = nil
+        } else {
+            layer.shadowOpacity = 0.9
+            layer.shadowRadius = 1.0
+            layer.shadowOffset = CGSize(width: 1.0, height: 1.0)
+            layer.shadowColor = UIColor.black.cgColor
+        }
     }
 
     /**
