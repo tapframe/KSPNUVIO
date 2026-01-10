@@ -23,6 +23,7 @@ RCT_EXPORT_VIEW_PROPERTY(subtitleBottomOffset, NSNumber)
 RCT_EXPORT_VIEW_PROPERTY(subtitleFontSize, NSNumber)
 RCT_EXPORT_VIEW_PROPERTY(subtitleTextColor, NSString)
 RCT_EXPORT_VIEW_PROPERTY(subtitleBackgroundColor, NSString)
+RCT_EXPORT_VIEW_PROPERTY(subtitleOutlineEnabled, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(resizeMode, NSString)
 
 // Event properties

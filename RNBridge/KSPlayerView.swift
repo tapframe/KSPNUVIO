@@ -13,6 +13,7 @@ import SwiftUI
 
 @objc(KSPlayerView)
 class KSPlayerView: UIView {
+    private static let nuvioOutlineKey = NSAttributedString.Key("nuvioOutline")
     private var playerView: IOSVideoPlayerView!
     private var currentSource: NSDictionary?
     private var isPaused = false
@@ -91,6 +92,12 @@ class KSPlayerView: UIView {
         didSet { applySubtitleAppearance() }
     }
     @objc var subtitleBackgroundColor: NSString = "rgba(0,0,0,0.7)" {
+        didSet { applySubtitleAppearance() }
+    }
+
+    /// App-level outline toggle for KSPlayer built-in (internal) subtitles.
+    /// Width is fixed; the UI only exposes an on/off toggle.
+    @objc var subtitleOutlineEnabled: Bool = false {
         didSet { applySubtitleAppearance() }
     }
     
@@ -176,6 +183,7 @@ class KSPlayerView: UIView {
     private func applySubtitleAppearance() {
         // Font size
         SubtitleModel.textFontSize = CGFloat(truncating: subtitleFontSize)
+        SubtitleModel.textOutlineEnabled = subtitleOutlineEnabled
 
         // Text color
         if let uiColor = parseColor(String(subtitleTextColor)) {
@@ -185,10 +193,10 @@ class KSPlayerView: UIView {
         }
 
         // Background color
-        if let uiBg = parseColor(String(subtitleBackgroundColor)) {
-            if #available(iOS 14.0, *) {
-                SubtitleModel.textBackgroundColor = Color(uiBg)
-            }
+        let bgRaw = String(subtitleBackgroundColor)
+        let uiBg = parseColor(bgRaw) ?? UIColor.clear
+        if #available(iOS 14.0, *) {
+            SubtitleModel.textBackgroundColor = Color(uiBg)
         }
 
         // Position
@@ -196,8 +204,45 @@ class KSPlayerView: UIView {
         playerView?.updateSrt()
     }
 
+    private func applyOutlineIfNeeded(_ text: NSAttributedString?) -> NSAttributedString? {
+        guard let text, text.length > 0 else { return text }
+
+        let fullRange = NSRange(location: 0, length: text.length)
+        let mutable = NSMutableAttributedString(attributedString: text)
+
+        // Remove previously applied app outline without touching original subtitle styling.
+        var hadUserOutline = false
+        text.enumerateAttribute(Self.nuvioOutlineKey, in: fullRange, options: []) { value, _, stop in
+            if value != nil {
+                hadUserOutline = true
+                stop.pointee = true
+            }
+        }
+        if hadUserOutline {
+            mutable.removeAttribute(Self.nuvioOutlineKey, range: fullRange)
+            mutable.removeAttribute(.strokeWidth, range: fullRange)
+            mutable.removeAttribute(.strokeColor, range: fullRange)
+        }
+
+        guard SubtitleModel.textOutlineEnabled else {
+            return mutable
+        }
+
+        // Apply fixed outline.
+        // Negative strokeWidth draws both fill + stroke.
+        mutable.addAttributes([
+            .strokeWidth: -3.0,
+            .strokeColor: UIColor.black,
+            Self.nuvioOutlineKey: true,
+        ], range: fullRange)
+        return mutable
+    }
+
     private func parseColor(_ raw: String) -> UIColor? {
         let s = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if s == "transparent" || s == "clear" {
+            return UIColor.clear
+        }
         if s.hasPrefix("#") {
             let hex = String(s.dropFirst())
             if hex.count == 6 {
@@ -965,7 +1010,14 @@ extension KSPlayerView: KSPlayerLayerDelegate {
                 playerView.subtitleBackView.image = part.image
                 // Keep original attributed text so SubtitleModel.textFontSize changes are honored.
                 // (Previously we forced a constant 20pt font here, breaking subtitle sizing.)
-                playerView.subtitleLabel.attributedText = part.text
+                playerView.subtitleLabel.attributedText = applyOutlineIfNeeded(part.text)
+
+                // Avoid double styling artifacts: when outline is enabled, remove layer shadow.
+                if SubtitleModel.textOutlineEnabled {
+                    playerView.subtitleLabel.layer.shadowOpacity = 0
+                } else {
+                    playerView.subtitleLabel.layer.shadowOpacity = 0.9
+                }
                 
                 playerView.subtitleBackView.isHidden = false
                 playerView.subtitleLabel.isHidden = false

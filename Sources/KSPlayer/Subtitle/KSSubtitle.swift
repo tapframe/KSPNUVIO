@@ -286,6 +286,9 @@ open class SubtitleModel: ObservableObject {
     public static var textFontSize = SubtitleModel.Size.standard.rawValue
     public static var textBold = false
     public static var textItalic = false
+    /// App-controlled outline for plain text subtitles (used by RN bridge for KSPlayer built-in subtitles).
+    /// This is applied at render time by the host app (not by KSPlayer core).
+    public static var textOutlineEnabled = false
     public static var textPosition = TextPosition()
     public static var audioRecognizes = [any AudioRecognize]()
     private var subtitleDataSouces: [SubtitleDataSouce] = KSOptions.subtitleDataSouces
