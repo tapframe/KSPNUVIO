@@ -210,28 +210,25 @@ class KSPlayerView: UIView {
         let fullRange = NSRange(location: 0, length: text.length)
         let mutable = NSMutableAttributedString(attributedString: text)
 
-        // Remove previously applied app outline without touching original subtitle styling.
-        var hadUserOutline = false
-        text.enumerateAttribute(Self.nuvioOutlineKey, in: fullRange, options: []) { value, _, stop in
-            if value != nil {
-                hadUserOutline = true
-                stop.pointee = true
-            }
-        }
-        if hadUserOutline {
-            mutable.removeAttribute(Self.nuvioOutlineKey, range: fullRange)
-            mutable.removeAttribute(.strokeWidth, range: fullRange)
-            mutable.removeAttribute(.strokeColor, range: fullRange)
-        }
+        // Clean up common "artifact" sources from embedded subtitle styling.
+        // This prevents double-styling (track-provided outline/shadow + our own).
+        mutable.removeAttribute(Self.nuvioOutlineKey, range: fullRange)
+        mutable.removeAttribute(.strokeWidth, range: fullRange)
+        mutable.removeAttribute(.strokeColor, range: fullRange)
+        mutable.removeAttribute(.shadow, range: fullRange)
+
+        // Ensure a consistent text color (some tracks carry weird colors/styles).
+        let uiColor = parseColor(String(subtitleTextColor)) ?? UIColor.white
+        mutable.addAttribute(.foregroundColor, value: uiColor, range: fullRange)
 
         guard SubtitleModel.textOutlineEnabled else {
             return mutable
         }
 
-        // Apply fixed outline.
+        // Apply fixed outline (slightly thinner to reduce inner-edge artifacts).
         // Negative strokeWidth draws both fill + stroke.
         mutable.addAttributes([
-            .strokeWidth: -3.0,
+            .strokeWidth: -2.0,
             .strokeColor: UIColor.black,
             Self.nuvioOutlineKey: true,
         ], range: fullRange)
@@ -281,6 +278,49 @@ class KSPlayerView: UIView {
         }
 
         return nil
+    }
+
+    /// Image-based subtitles (PGS/VobSub) come in as bitmap `UIImage`s and are not font-scalable.
+    /// To avoid "giant subtitles", we downscale them to fit a conservative portion of the video view.
+    private func downscaledImageSubtitle(_ image: UIImage) -> UIImage {
+        // If layout isn't ready yet, don't attempt to scale.
+        let bounds = playerView?.bounds ?? self.bounds
+        if bounds.width <= 1 || bounds.height <= 1 {
+            return image
+        }
+
+        // Keep subtitles comfortably sized (tweakable defaults).
+        // Slightly smaller than before to avoid "giant" bitmap subtitles.
+        let maxWidth = bounds.width * 0.85
+        let maxHeight = bounds.height * 0.16
+
+        let srcSize = image.size
+        guard srcSize.width > 0, srcSize.height > 0 else {
+            return image
+        }
+
+        let widthScale = maxWidth / srcSize.width
+        let heightScale = maxHeight / srcSize.height
+        let scale = min(1.0, widthScale, heightScale) // never upscale
+
+        // Already small enough
+        if scale >= 0.999 {
+            return image
+        }
+
+        let dstSize = CGSize(width: floor(srcSize.width * scale), height: floor(srcSize.height * scale))
+        if dstSize.width < 1 || dstSize.height < 1 {
+            return image
+        }
+
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = false
+        format.scale = image.scale // preserve Retina density
+
+        let renderer = UIGraphicsImageRenderer(size: dstSize, format: format)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: dstSize))
+        }
     }
 
     func setSource(_ source: NSDictionary) {
@@ -603,6 +643,13 @@ class KSPlayerView: UIView {
 
                 if let track = selectedTrack {
                     NSLog("KSPlayerView: Selecting text track %d (index: %d): '%@' (ID: %d)", trackId, trackIndex, track.name, track.trackID)
+                    NSLog(
+                        "KSPlayerView: Text track metadata: name='%@' language='%@' languageCode='%@' isImageSubtitle=%@",
+                        track.name,
+                        track.language ?? "Unknown",
+                        track.languageCode ?? "",
+                        track.isImageSubtitle ? "true" : "false"
+                    )
 
                     // Disable all tracks first
                     for t in textTracks {
@@ -617,7 +664,7 @@ class KSPlayerView: UIView {
                     
                     // CRITICAL: Cast MediaPlayerTrack to SubtitleInfo and set on srtControl
                     // FFmpegAssetTrack conforms to SubtitleInfo via extension
-                    if let subtitleInfo = track as? SubtitleInfo {
+                    if let subtitleInfo = track as? any SubtitleInfo {
                         self.playerView.srtControl.selectedSubtitleInfo = subtitleInfo
                         NSLog("KSPlayerView: Set srtControl.selectedSubtitleInfo to track '%@'", track.name)
                     } else {
@@ -1007,17 +1054,22 @@ extension KSPlayerView: KSPlayerLayerDelegate {
         if hasSubtitleParts {
             if let part = playerView.srtControl.parts.first {
                 print("KSPlayerView: [SUBTITLE RENDER] time=\(currentTime), text='\(part.text?.string ?? "nil")', hasImage=\(part.image != nil)")
-                playerView.subtitleBackView.image = part.image
+                if let img = part.image {
+                    // Image-based subtitle: downscale to avoid huge bitmap subtitles.
+                    playerView.subtitleBackView.contentMode = .center
+                    playerView.subtitleBackView.image = downscaledImageSubtitle(img)
+                } else {
+                    playerView.subtitleBackView.image = nil
+                }
                 // Keep original attributed text so SubtitleModel.textFontSize changes are honored.
                 // (Previously we forced a constant 20pt font here, breaking subtitle sizing.)
                 playerView.subtitleLabel.attributedText = applyOutlineIfNeeded(part.text)
 
-                // Avoid double styling artifacts: when outline is enabled, remove layer shadow.
-                if SubtitleModel.textOutlineEnabled {
-                    playerView.subtitleLabel.layer.shadowOpacity = 0
-                } else {
-                    playerView.subtitleLabel.layer.shadowOpacity = 0.9
-                }
+                // Avoid double-styling artifacts: do not apply UILabel layer shadow.
+                // (Tracks may already carry styling; we handle outline via attributed text only.)
+                playerView.subtitleLabel.layer.shadowOpacity = 0
+                playerView.subtitleLabel.layer.shadowRadius = 0
+                playerView.subtitleLabel.layer.shadowOffset = .zero
                 
                 playerView.subtitleBackView.isHidden = false
                 playerView.subtitleLabel.isHidden = false
