@@ -391,28 +391,20 @@ class KSPlayerView: UIView {
     }
 
     private func createOptions(with headers: [String: String]) -> KSOptions {
-        // Use custom HighPerformanceOptions subclass for frame buffer optimization
-        let options = HighPerformanceOptions()
+        // Use standard KSOptions for maximum stability (library defaults)
+        let options = KSOptions()
         // Disable native player remote control center integration; use RN controls
         options.registerRemoteControll = false
         
-        // PERFORMANCE OPTIMIZATION: Buffer durations for smooth high bitrate playback
-        // preferredForwardBufferDuration = 5.0s: Increased to prevent stalling on network hiccups
-        options.preferredForwardBufferDuration = 5.0
-        // maxBufferDuration = 300.0s: Increased to allow 5 minutes of cache ahead
-        options.maxBufferDuration = 300.0
+        // Buffer durations removed: using library defaults (3.0s / 30.0s)
         
         // Enable "second open" to relax startup/seek buffering thresholds (already enabled)
         options.isSecondOpen = true
         
-        // PERFORMANCE OPTIMIZATION: Fast stream analysis for high bitrate content
-        // Reduces startup latency significantly for large high-bitrate streams
-        options.probesize = 50_000_000  // 50MB for faster format detection
-        options.maxAnalyzeDuration = 5_000_000  // 5 seconds in microseconds for faster stream structure analysis
+        // Stream analysis removed: using library defaults
         
-        // PERFORMANCE OPTIMIZATION: Decoder thread optimization
-        // Use all available CPU cores for parallel decoding
-        options.decoderOptions["threads"] = "0"  // Use all CPU cores instead of "auto"
+        // Decoder thread management removed: using library default ("auto")
+        options.decoderOptions["threads"] = "auto"
         // refcounted_frames already set to "1" in KSOptions init for memory efficiency
         
         // PERFORMANCE OPTIMIZATION: Hardware decode explicitly enabled
@@ -856,34 +848,7 @@ class KSPlayerView: UIView {
 
 // MARK: - High Performance KSOptions Subclass
 
-/// Custom KSOptions subclass that overrides frame buffer capacity for high bitrate content
-/// More buffered frames absorb decode spikes and network hiccups without quality loss
-private class HighPerformanceOptions: KSOptions {
-    /// Override to increase frame buffer capacity for high bitrate content
-    /// - Parameters:
-    ///   - fps: Video frame rate
-    ///   - naturalSize: Video resolution
-    ///   - isLive: Whether this is a live stream
-    /// - Returns: Number of frames to buffer
-    override func videoFrameMaxCount(fps: Float, naturalSize: CGSize, isLive: Bool) -> UInt8 {
-        if isLive {
-            // Increased from 4 to 8 for better live stream stability
-            return 8
-        }
-        
-        // For high bitrate VOD: increase buffer based on resolution
-        if naturalSize.width >= 3840 || naturalSize.height >= 2160 {
-            // 4K needs more buffer frames to handle decode spikes
-            return 32
-        } else if naturalSize.width >= 1920 || naturalSize.height >= 1080 {
-            // 1080p benefits from more frames
-            return 24
-        }
-        
-        // Default for lower resolutions
-        return 16
-    }
-}
+
 
 extension KSPlayerView: KSPlayerLayerDelegate {
     func player(layer: KSPlayerLayer, state: KSPlayerState) {
